@@ -1,3 +1,6 @@
+#############################################################################################################################
+############################# COMETARY_FEATURE_CO_MOLECULES_OPTICAL_DEPTH_&_COLUMN_DENSITY ##################################
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import*
