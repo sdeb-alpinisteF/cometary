@@ -13,83 +13,352 @@ from pvextractor import extract_pv_slice
 from pvextractor import Path
 from sympy import nsolve
 from scipy.optimize import fsolve 
-
+from scipy.constants import*
+from astropy import constants as const
+from astropy import units as u
 #import matplotlib.mlab as mlab
 from astropy.convolution import Kernel1D
 import scipy.ndimage as nd
 
-
-cube4 = SpectralCube.read('outfl4_02.fits') 
-cube4_12co = SpectralCube.read('12co_outflow4_reprjctd.fits')
-comt = Projection.from_hdu(fits.open('outfl4_comt.fits')[0]) #file created from cutout(saved in the same folder)
-#downloaded from http://unwise.me/imgsearch/ using ds9 package 
-cube4_C18O=SpectralCube.read('outflow4_c18o.fits')
-
-##################################### OPTICAL DEPTH ################################################################
-
 cometaryCUBE_13co=SpectralCube.read('outfl4_02.fits')
 cometaryCUBE_12co=SpectralCube.read('12co_outflow4_reprjctd.fits')
 cometaryCUBE_c18o=SpectralCube.read('c18o_outflow4_reproj.fits') 
+####################################################################################################################
+######################## OPTICAL DEPTH CALCULATION:12CO(3-2) 20X23X903 CELLS #######################################
+
+############ These codes will detect if there is a stipulated significant emission in every pixel or not ##############
+############################################# 12CO #################################################################
+
+data12 = cometaryCUBE_12co.filled_data[:]#removes empty directions from 3D spectrum (1445,1,1--> 1445)
+sigma12=np.median(np.abs(data12 - np.roll(data12,-1)),axis=0) * 1.4826/(2**(0.5)) #calculates std. dev. of T_B noise 
+#vel=spec12.spectral_axis.value
+mask12=data12>3*sigma12
+mask_rolled12=mask12*np.roll(mask12,1)
+        
+############################################# 13CO #################################################################
+
+data13 = cometaryCUBE_13co.filled_data[:]#removes empty directions from 3D spectrum (1445,1,1--> 1445)
+sigma13=np.median(np.abs(data13 - np.roll(data13,-1)),axis=0) * 1.4826/(2**(0.5)) #calculates std. dev. of T_B noise 
+mask13=data13>3*sigma13
+mask_rolled13=mask13*np.roll(mask13,1)
+        
+############################################# C18O #################################################################
+
+data18 = cometaryCUBE_c18o.filled_data[:]#removes empty directions from 3D spectrum (1445,1,1--> 1445)
+sigma18=np.median(np.abs(data18 - np.roll(data18,-1)),axis=0) * 1.4826/(2**(0.5)) #calculates std. dev. of T_B noise 
+mask18=data18>3*sigma18
+mask_rolled18=mask18*np.roll(mask18,1)
+
+######### WE NEED TO MAKE THE 3 FILES COMPARABLE WRT AREAS OF SIGNIFICANT EMISSON. WE USE 13CO AS THE REFERENCE AND 
+#SLICE THOSE PIXELS OFF 12CO AND C18O FILES THAT HAVE SIG. EMISSION IN 13CO ########################################
+
+where12=np.where(mask_rolled12) #SELECTING REGIONS THAT HAVE SIGNIFICANT EMISSION (>15 SIGMA)
+where13=np.where(mask_rolled13)
+where18=np.where(mask_rolled18)
+
+slice13=data13[where13] 
+slice12=data12[where13]
+slice18=data18[where13]
+#slice23=slice12-slice13
+slice18=data18[where13]
+Tau12CO = np.zeros_like(mask_rolled13, dtype=float)
+Tau13CO = np.zeros_like(mask_rolled13, dtype=float)
+
+####################################################################################################################
+################################### CALCULATED FOR SIGNIFICANT EMISSION CELLS ######################################
+
+Tau12CO=np.zeros_like(cometaryCUBE_12co)
+Tau13CO=np.zeros(shape=(vdim,ydim,xdim))
+TauC18O=np.zeros(shape=(vdim,ydim,xdim))
 
 
-####################### OPTICAL DEPTH CALCULATION:12CO 20X23X903 CELLS ################################################
-tau12_nu=np.zeros_like(cometaryCUBE_12co) #defining a zero(empty) matrix for storing calculated tau values
+nu12=345.796*u.GHz  # 12CO(3-2) data found on http://home.strw.leidenuniv.nl/~moldata/datafiles/co.dat 
+T0_12CO=(((const.h.cgs)*nu12/(const.k_B.cgs)).to('K')).value
 
+####################################################################################################################
+################################### CALCULATED FOR CELLS WITH SIGNIFICANT EMISSION ######################################
+####################################### OPTICAL DEPTH FOR 12CO #################################################### 
 vdim=cometaryCUBE_12co.shape[0]
 xdim=cometaryCUBE_12co.shape[2]
 ydim=cometaryCUBE_12co.shape[1]
-print(xdim,ydim,vdim)
-temp_cmb=2.725
 
-counter=0
-for y in np.arange(0,5,1):
-    for x in np.arange(0,10,1):
-        #temp12ex_xy[j][k]=cometaryCUBE_12co.max(axis=0)[j][k].value
-        for v in np.arange(0,vdim-1,1):
-            #temp12_xynu=cometaryCUBE_12co[i][j][k]
-            if cometaryCUBE_12co[v][y][x].value<0:
-                tau12_nu[v][y][x]=np.log((temp12ex_xy[y][x]-temp_cmb)/(temp12ex_xy[y][x]-temp_cmb))
-                counter+=1
-            elif cometaryCUBE_12co[i][j][k].value+temp_cmb>0:
-                 tau12_nu[v][y][x]=np.log((temp12ex_xy[j][k]-temp_cmb)/(temp12ex_xy[y][x]-cometaryCUBE_12co[v][y][x].value-temp_cmb))  
-                    
-                    
-                    
-######################## OPTICAL DEPTH CALCULATION:12CO(3-2) 20X23X903 CELLS:VERSION 2 #############################
+nu=345.796*u.GHz  # 12CO(3-2) data found on http://home.strw.leidenuniv.nl/~moldata/datafiles/co.dat 
+T0=(((const.h.cgs)*nu/(const.k_B.cgs)).to('K')).value
 
-vdim=cometaryCUBE_12co.shape[0]
-xdim=cometaryCUBE_12co.shape[2]
-ydim=cometaryCUBE_12co.shape[1]
-print(xdim,ydim,vdim)
-temp_cmb=2.725*u.K
+v, y, x = where13
 
-for y in np.arange(15,ydim,1):
-    for x in np.arange(0,xdim,1):
-        temp12ex_xy=cometaryCUBE_12co.max(axis=0)[y][x]
-        for v in np.arange(0,vdim,1):
-            #temp12_xynu=cometaryCUBE_12co[i][j][k]
-            tau12_nu[v][y][x]=np.log((temp12ex_xy-temp_cmb)/(temp12ex_xy-cometaryCUBE_12co[v][y][x]-temp_cmb))
-            #if tau12_nu[i][j][k]<0:
-            #tau12_nu[i][j][k]=0        
-            
-            
+for i,j,k in zip(v,y,x):
+    Tex12=cometaryCUBE_12co[:,j,k].max().value+2.7
+    e0=np.exp(T0/2.7)-np.exp(T0/Tex12)
+    e_bg=1-np.exp(T0/2.7)
+    e_ex=1-np.exp(T0/Tex12)
+    Tau12CO[i,j,k] = np.log(T0*e0/(T0*e0-cometaryCUBE_12co.unmasked_data[i,j,k].value*e_bg*e_ex))  
+   
+
+
 uhdr=cometaryCUBE_12co.header
 new_hdrTau12=uhdr.copy()
 new_hdrTau12['BUNIT']=('')
-myhduTau12=fits.PrimaryHDU(tau12_nu,header=new_hdrTau12)
-myhduTau12.writeto('cometary_Tau12_nu.fits',overwrite=True)
+myhduTau12=fits.PrimaryHDU(Tau12CO,header=new_hdrTau12)
+myhduTau12.writeto('cometaryTau_12CO.fits',overwrite=True)
 
-tau12co_nu=SpectralCube.read('cometary_Tau12_nu.fits')
+################################### CALCULATED FOR SIGNIFICANT EMISSION CELLS ######################################
+####################################### OPTICAL DEPTH FOR 13CO #################################################### 
 
-######################### MAX OPTICAL DEPTH PLOT: 12CO ################################################################
+vdim=cometaryCUBE_13co.shape[0]
+xdim=cometaryCUBE_13co.shape[2]
+ydim=cometaryCUBE_13co.shape[1]
+
+nu13=330.588*u.GHz  # 13CO(3-2) DATA FROM SPLATALOGUE WEBSITE
+T0_13CO=(((const.h.cgs)*nu13/(const.k_B.cgs)).to('K')).value
+
+v, y, x = where13
+
+for i,j,k in zip(v,y,x):
+    Tex13=cometaryCUBE_13co[:,j,k].max().value+2.7
+    e0=np.exp(T0_13CO/2.7)-np.exp(T0_13CO/Tex13)
+    e_bg=1-np.exp(T0_13CO/2.7)
+    e_ex=1-np.exp(T0_13CO/Tex13)
+    Tau13CO[i,j,k] = np.log(T0_13CO*e0/(T0_13CO*e0-cometaryCUBE_13co.unmasked_data[i,j,k].value*e_bg*e_ex))  
+    
+uhdr=cometaryCUBE_13co.header
+new_hdrTau13=uhdr.copy()
+new_hdrTau13['BUNIT']=('')
+myhduTau13=fits.PrimaryHDU(Tau13CO,header=new_hdrTau13)
+myhduTau13.writeto('cometaryTau_13CO.fits',overwrite=True)
+
+################################### CALCULATED FOR SIGNIFICANT EMISSION CELLS #####################################
+####################################### OPTICAL DEPTH FOR C18O ####################################################
+
+nu18=329.331*u.GHz  # C18O(3-2) DATA FROM SPLATALOGUE WEBSITE
+T0_C18O=(((const.h.cgs)*nu18/(const.k_B.cgs)).to('K')).value
+
+v, y, x = where13
+
+for i,j,k in zip(v,y,x):
+    Tex18=cometaryCUBE_c18o[:,j,k].max().value+2.7
+    e0=np.exp(T0_C18O/2.7)-np.exp(T0_C18O/Tex18)
+    e_bg=1-np.exp(T0_C18O/2.7)
+    e_ex=1-np.exp(T0_C18O/Tex18)
+    TauC18O[i,j,k] = np.log(T0_C18O*e0/(T0_C18O*e0-cometaryCUBE_c18o.unmasked_data[i,j,k].value*e_bg*e_ex))  
+    
+uhdr=cometaryCUBE_c18o.header
+new_hdrTau18=uhdr.copy()
+new_hdrTau13['BUNIT']=('')
+myhduTau18=fits.PrimaryHDU(TauC18O,header=new_hdrTau18)
+myhduTau18.writeto('cometaryTau_C18O.fits',overwrite=True)
+
+######################### TOTAL OPTICAL DEPTH PLOT: 12CO,13CO,C18O ###################################################
+
+tau12CO=SpectralCube.read('cometaryTau_12CO.fits')
+tau13CO=SpectralCube.read('cometaryTau_13CO.fits')
+tauC18O=SpectralCube.read('cometaryTau_C18O.fits')
 
 ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_12co[0].wcs)
-im=ax.imshow(tau12co_nu.sum(axis=0).value,interpolation='nearest',label='$^{12}CO$',origin='lower',cmap='gray',vmin=0,vmax=150)
+im=ax.imshow(tau12CO.sum(axis=0).value,interpolation='nearest',origin='lower',cmap='gray',vmin=0,vmax=100)
 ax.set_ylabel("Dec")
 ax.set_xlabel("RA")
 clb=plt.colorbar(im)
 clb.set_label('Total optical depth ($^{12}$CO)', labelpad=5, y=.5, rotation=90)
 plt.legend()
 plt.show()
+
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_12co[0].wcs)
+im=ax.imshow(tau13CO.sum(axis=0).value,interpolation='nearest',origin='lower',cmap='gray',vmin=0,vmax=100)
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('Total optical depth ($^{13}$CO)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+
+
+######################### OPTICAL DEPTH RATIOS: 12/13 AND 12/18 ###################################################
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_12co[0].wcs)
+im=ax.imshow(tau12CO.sum(axis=0).value/(tau13CO.sum(axis=0).value),interpolation='nearest',origin='lower',cmap='jet',vmin=0,vmax=6)
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('optical depth ratio($^{13}$CO)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_12co[0].wcs)
+im=ax.imshow(tau12CO.sum(axis=0).value/(tauC18O.sum(axis=0).value),interpolation='nearest',origin='lower',cmap='jet',vmin=0,vmax=10)
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('optical depth ratio($^{13}$CO)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+
+#######################################################################################################################
+######################### CALCULATION OF COLUMN DENSITY FROM OPTICAL DEPTH MAP:12CO(3-2) ##############################
+colDens_12co=np.zeros(shape=(ydim,xdim))
+colDens_13co=np.zeros(shape=(ydim,xdim))
+colDens_c18o=np.zeros(shape=(ydim,xdim))
+######################### N_J COLUMN DENSITY IN LEVEL J FROM OPTICAL DEPTH MAP:12CO(3-2) #################################
+g2=1
+g3=1
+A32=6.91e-7
+#nu=230.54  # 12CO(3-2) data found on http://home.strw.leidenuniv.nl/~moldata/datafiles/co.dat 
+C1=93.5*(g2/g2)/A32
+
+for y in np.arange(0,ydim,1):
+    for x in np.arange(0,xdim,1):
+        temp12ex=cometaryCUBE_12co.max(axis=0)[y][x].value+2.7
+        C2=1/(1-np.exp(-4.8e-2*nu12.value/temp12ex))
+        colDens_12co[y][x]=C1*((nu12.value)**3)*C2*(tau12CO.moment(order=0,axis=0)[y][x]).value
+
+##################### CALCULATION OF N_J COLUMN DENSITY IN LEVEL J FROM OPTICAL DEPTH MAP:13CO(3-2) #####################
+g2=1
+g3=1
+A32=6.038e-7 
+#nu=220.399    # 13CO(3-2) data found on http://home.strw.leidenuniv.nl/~moldata/datafiles/13co.dat 
+C1=93.5*(g2/g2)/A32
             
-          
+for y in np.arange(0,ydim,1):
+    for x in np.arange(0,xdim,1):
+        temp13ex=cometaryCUBE_13co.max(axis=0)[y][x].value+2.7
+        C2=1/(1-np.exp(-4.8e-2*nu13.value/temp12ex))
+        colDens_13co[y][x]=(C1*((nu13.value)**3)*C2*tau13CO.moment(order=0,axis=0)[y][x]).value
+
+
+######################### N_J COLUMN DENSITY IN LEVEL J FROM OPTICAL DEPTH MAP:C18O(3-2) #################################
+g2=1
+g3=1
+A32=6.011e-7
+#nu=219.56    # C18O(3-2) data found on http://home.strw.leidenuniv.nl/~moldata/datafiles/c18o.dat
+C1=93.5*(g2/g2)/A32
+
+for y in np.arange(0,ydim,1):
+    for x in np.arange(0,xdim,1):
+        temp18ex=cometaryCUBE_c18o.max(axis=0)[y][x].value+2.7
+        C2=1/(1-np.exp(-4.8e-2*nu18.value/temp12ex))
+        colDens_c18o[y][x]=(C1*((nu18.value)**3)*C2*tauC18O.moment(order=0,axis=0)[y][x]).value
+
+
+##################### TOTAL COLUMN DENSITY N(TOTAL)=N_J*Z/Z(J=2):12CO,13CO,C18O ####################################
+ColDensTot_12CO=np.zeros(shape=(ydim,xdim))
+ColDensTot_13CO=np.zeros(shape=(ydim,xdim))
+ColDensTot_C18O=np.zeros(shape=(ydim,xdim))
+
+
+B_e=1.93/u.cm #ROTATIONAL CONSTANT OF 12CO (using the same for 13CO and C18O)
+
+for y in np.arange(0,ydim,1):
+    for x in np.arange(0,xdim,1):
+        Tex12=cometaryCUBE_12co.max(axis=0)[y][x].value+2.7
+        Tex13=cometaryCUBE_13co.max(axis=0)[y][x].value+2.7
+        Tex18=cometaryCUBE_c18o.max(axis=0)[y][x].value+2.7
+        Z12=const.k_B.cgs*Tex12/const.h.cgs*B_e # APPROXIMATED PARTITION FUNCTION AS hBe/kT RATIO IS OF THE ORDER OF 10^-9
+        Z13=const.k_B.cgs*Tex13/const.h.cgs*B_e
+        Z18=const.k_B.cgs*Tex18/const.h.cgs*B_e
+        ColDensTot_12CO[y][x]=colDens_12co[y][x]*Z12.value/((2*(2+1))*np.exp((const.h.cgs*B_e*2*(2+1)/const.k_B.cgs*Tex12).value))
+        ColDensTot_13CO[y][x]=colDens_13co[y][x]*Z13.value/((2*(2+1))*np.exp((const.h.cgs*B_e*2*(2+1)/const.k_B.cgs*Tex13).value))
+        ColDensTot_C18O[y][x]=colDens_c18o[y][x]*Z18.value/((2*(2+1))*np.exp((const.h.cgs*B_e*2*(2+1)/const.k_B.cgs*Tex18).value))
+        
+
+######################## PARTITION FUNCTION FOR 12CO #######################################################################
+Z12=const.k_B.cgs*Tex12co/const.h.cgs*B_e
+Z12.max()
+Z=0
+for J in np.arange(0,10**4,1):
+    Z+=(2*J+1)/np.exp((const.h.cgs*B_e*J*(J+1)/(const.k_B.cgs*Tex12co)).value)
+    
+print(Z.shape)
+
+Z.max(axis=1)      
+        
+######################## COLUMN DENSITY MAP: 12CO, 13CO, C18O ###############################################################
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_12co[0].wcs)
+im=ax.imshow(ColDensTot_12CO,interpolation='nearest',origin='lower',cmap='gray',vmin=0,vmax=5.5e30) #need log scale
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('Column Density ($^{12}$CO cm$^{-2}$)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_13co[0].wcs)
+im=ax.imshow(ColDensTot_13CO,interpolation='nearest',origin='lower',cmap='gray',vmin=0,vmax=2e27) #need log scale
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('Column Density ($^{13}$CO cm$^{-2}$)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_c18o[0].wcs)
+im=ax.imshow(ColDensTot_C18O,interpolation='nearest',origin='lower',cmap='gray',vmin=0,vmax=3e26) #need log scale
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('Column Density (C$^{18}$O cm$^{-2}$)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+#################### COLUMN DENSITY COMPARISON ##############################################################################
+
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_13co[0].wcs)
+im=ax.imshow(ColDensTot_12CO/ColDensTot_13CO,interpolation='nearest',origin='lower',cmap='gray',vmin=0,vmax=3000) #need log scale
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('$\mathcal{N}$ ($^{12}$CO) / $\mathcal{N}$ ($^{13}$CO)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+ax = plt.figure().add_axes([0.15, 0.1, 0.8, 1], projection=cometaryCUBE_13co[0].wcs)
+im=ax.imshow(ColDensTot_12CO/ColDensTot_C18O,interpolation='nearest',origin='lower',cmap='gray',vmin=0,vmax=50000) #need log scale
+ax.set_ylabel("Dec")
+ax.set_xlabel("RA")
+clb=plt.colorbar(im)
+clb.set_label('$\mathcal{N}$ ($^{12}$CO) / $\mathcal{N}$ (C$^{18}$O)', labelpad=5, y=.5, rotation=90)
+plt.legend()
+plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
